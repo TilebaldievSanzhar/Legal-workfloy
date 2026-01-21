@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  # Watcher service - monitors for new/deleted files
+  watcher:
+    build: .
+    container_name: contract-watcher
+    restart: unless-stopped
+    command: python scripts/run_watcher.py
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - STATE_FILE_PATH=/app/data/processed_state.json
+
+  # Batch processor - for initial data load (run manually)
+  batch:
+    build: .
+    container_name: contract-batch
+    profiles:
+      - batch
+    command: python scripts/run_batch.py
+    env_file:
+      - .env
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - STATE_FILE_PATH=/app/data/processed_state.json
+
+# Shared data volume
+volumes:
+  data:
