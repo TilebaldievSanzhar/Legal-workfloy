@@ -17,23 +17,43 @@ from tenacity import (
     retry_if_exception_type
 )
 
-from .models import ContractExtract, ContractStatus
+from .models import ContractExtract, ContractStatus, DocumentType
 from .utils import get_logger
 
 logger = get_logger("llm_engine")
 
 
 # Extraction prompt in Russian
-EXTRACTION_PROMPT = """Проанализируй PDF-документ договора и извлеки следующую информацию.
+EXTRACTION_PROMPT = """Проанализируй PDF-документ и извлеки следующую информацию.
 Ответ ДОЛЖЕН быть строго в формате JSON без дополнительного текста.
 
 Извлеки:
-1. contract_number - номер договора (строка или null если не найден)
-2. counterparty_name - наименование контрагента (вторая сторона договора)
-3. start_date - дата заключения договора в формате YYYY-MM-DD (или null)
-4. end_date - дата окончания договора в формате YYYY-MM-DD (или null если бессрочный)
-5. is_perpetual - true если договор бессрочный, false если срочный
-6. status - статус договора, одно из значений:
+1. document_type - тип документа, одно из значений:
+   - "договор" - основной договор
+   - "доп соглашение" - дополнительное соглашение к договору
+   - "спецификация" - спецификация к договору
+   - "приложение" - приложение к договору
+   - "протокол" - протокол разногласий или согласования
+   - "акт" - акт выполненных работ/приема-передачи
+   - "счёт-фактура" - счёт-фактура
+   - "прочее" - если тип неясен
+
+2. contract_number - номер договора (строка или null если не найден)
+
+3. counterparty_name - наименование контрагента (вторая сторона договора)
+
+4. city - город из документа (null если не указан)
+   Ищи в шапке документа, адресах сторон или в месте заключения.
+   Города Кыргызстана: Бишкек, Ош, Токмок, Кант, Каракол, Джалал-Абад, Нарын, Талас, Баткен и др.
+   Может быть указан как "г. Бишкек", "г.Ош" или просто "Бишкек".
+
+5. start_date - дата заключения договора в формате YYYY-MM-DD (или null)
+
+6. end_date - дата окончания договора в формате YYYY-MM-DD (или null если бессрочный)
+
+7. is_perpetual - true если договор бессрочный, false если срочный
+
+8. status - статус договора, одно из значений:
    - "действует" - договор активен
    - "исполнен" - договор исполнен
    - "истек" - срок действия истек
@@ -42,12 +62,15 @@ EXTRACTION_PROMPT = """Проанализируй PDF-документ дого�
    - "претензия" - имеется претензия
    - "суд. разбирательство" - судебное разбирательство
    - "требует проверки" - если статус неясен
-7. summary - краткая суть договора (максимум 10 слов)
+
+9. summary - краткая суть договора (максимум 10 слов)
 
 Пример ответа:
 {
+  "document_type": "договор",
   "contract_number": "123/2024",
   "counterparty_name": "ООО Ромашка",
+  "city": "Бишкек",
   "start_date": "2024-01-15",
   "end_date": "2025-01-14",
   "is_perpetual": false,
@@ -199,13 +222,28 @@ class LLMEngine:
             # Parse JSON
             data = json.loads(text)
 
+            # Map document type string to enum
+            doc_type_str = data.get("document_type", "договор")
+            doc_type = self._map_document_type(doc_type_str)
+
             # Map status string to enum
             status_str = data.get("status", "требует проверки")
             status = self._map_status(status_str)
 
+            # Normalize city (remove "г. " prefix if present)
+            city = data.get("city")
+            if city:
+                city = city.strip()
+                if city.lower().startswith("г. "):
+                    city = city[3:].strip()
+                elif city.lower().startswith("г."):
+                    city = city[2:].strip()
+
             return ContractExtract(
+                document_type=doc_type,
                 contract_number=data.get("contract_number"),
                 counterparty_name=data.get("counterparty_name", "Неизвестен"),
+                city=city,
                 start_date=data.get("start_date"),
                 end_date=data.get("end_date"),
                 is_perpetual=data.get("is_perpetual", False),
@@ -219,11 +257,45 @@ class LLMEngine:
 
             # Return default with unknown status
             return ContractExtract(
+                document_type=DocumentType.OTHER,
                 counterparty_name="Ошибка разбора",
                 is_perpetual=False,
                 status=ContractStatus.UNKNOWN,
                 summary="Ошибка извлечения данных"
             )
+
+    @staticmethod
+    def _map_document_type(doc_type_str: str) -> DocumentType:
+        """
+        Map document type string to DocumentType enum.
+
+        Args:
+            doc_type_str: Document type string from LLM
+
+        Returns:
+            DocumentType enum value
+        """
+        doc_type_mapping = {
+            "договор": DocumentType.CONTRACT,
+            "контракт": DocumentType.CONTRACT,
+            "доп соглашение": DocumentType.ADDENDUM,
+            "дополнительное соглашение": DocumentType.ADDENDUM,
+            "допсоглашение": DocumentType.ADDENDUM,
+            "спецификация": DocumentType.SPECIFICATION,
+            "приложение": DocumentType.ANNEX,
+            "протокол": DocumentType.PROTOCOL,
+            "акт": DocumentType.ACT,
+            "акт выполненных работ": DocumentType.ACT,
+            "акт приема-передачи": DocumentType.ACT,
+            "счёт-фактура": DocumentType.INVOICE,
+            "счет-фактура": DocumentType.INVOICE,
+            "счёт": DocumentType.INVOICE,
+            "счет": DocumentType.INVOICE,
+            "прочее": DocumentType.OTHER,
+        }
+
+        doc_type_lower = doc_type_str.lower().strip()
+        return doc_type_mapping.get(doc_type_lower, DocumentType.OTHER)
 
     @staticmethod
     def _map_status(status_str: str) -> ContractStatus:

@@ -42,8 +42,9 @@ def extract_city(path: str) -> Optional[str]:
     """
     Extract city name from the file path.
 
-    Looks for common Russian city names in the path.
+    Looks for Kyrgyz and Russian city names in the path.
     Cities are typically folder names in the path structure.
+    Supports formats: "г. Бишкек", "г.Бишкек", "Бишкек"
 
     Args:
         path: Full file path
@@ -51,8 +52,32 @@ def extract_city(path: str) -> Optional[str]:
     Returns:
         City name if found, None otherwise
     """
-    # Common Russian cities to look for
-    known_cities = [
+    # Kyrgyz cities (primary focus)
+    kyrgyz_cities = [
+        "Бишкек", "Bishkek",
+        "Ош", "Osh",
+        "Токмок", "Tokmok",
+        "Кант", "Kant",
+        "Каракол", "Karakol",
+        "Джалал-Абад", "Jalal-Abad", "Джалалабад",
+        "Нарын", "Naryn",
+        "Талас", "Talas",
+        "Баткен", "Batken",
+        "Кызыл-Кия", "Kyzyl-Kiya",
+        "Узген", "Uzgen", "Өзгөн",
+        "Кара-Балта", "Kara-Balta",
+        "Майлуу-Суу", "Mailuu-Suu",
+        "Таш-Кумыр", "Tash-Kumyr",
+        "Кок-Жангак", "Kok-Jangak",
+        "Исфана", "Isfana",
+        "Сулюкта", "Sulukta",
+        "Кара-Суу", "Kara-Suu",
+        "Балыкчы", "Balykchy",
+        "Чолпон-Ата", "Cholpon-Ata",
+    ]
+
+    # Russian cities (for compatibility)
+    russian_cities = [
         "Москва", "Moscow",
         "Санкт-Петербург", "СПб", "Saint-Petersburg", "St. Petersburg",
         "Новосибирск", "Novosibirsk",
@@ -96,20 +121,34 @@ def extract_city(path: str) -> Optional[str]:
         "Сочи", "Sochi",
     ]
 
+    # Combine: Kyrgyz cities first (priority)
+    known_cities = kyrgyz_cities + russian_cities
+
     path_normalized = path.replace("\\", "/")
     path_parts = path_normalized.split("/")
 
+    # Helper to clean city prefix like "г. " or "г."
+    def clean_city_prefix(s: str) -> str:
+        s = s.strip()
+        if s.lower().startswith("г. "):
+            return s[3:].strip()
+        if s.lower().startswith("г."):
+            return s[2:].strip()
+        return s
+
     # Check each path component against known cities
     for part in path_parts:
-        part_lower = part.lower()
+        part_clean = clean_city_prefix(part)
+        part_lower = part_clean.lower()
         for city in known_cities:
             if city.lower() == part_lower:
                 return city
 
     # If no exact match, try partial match for city folders
     for part in path_parts:
+        part_clean = clean_city_prefix(part)
         for city in known_cities:
-            if city.lower() in part.lower():
+            if city.lower() in part_clean.lower():
                 return city
 
     return None

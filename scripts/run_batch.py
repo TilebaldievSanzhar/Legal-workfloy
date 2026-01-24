@@ -8,7 +8,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from tqdm import tqdm
 
@@ -44,8 +44,8 @@ def process_file(
     file_meta: FileMetadata,
     nextcloud: NextcloudClient,
     llm: LLMEngine,
-    target_folders: list[str]
-) -> TableRow | None:
+    target_folders: List[str]
+) -> Optional[TableRow]:
     """
     Process a single file and return TableRow.
 
@@ -77,7 +77,7 @@ def process_file(
         row = TableRow.from_extract(
             extract=extract,
             subsidiary=path_info.subsidiary,
-            city=path_info.city,
+            city_from_path=path_info.city,
             year=path_info.year,
             nextcloud_link=nc_link,
             filename=file_meta.filename,
@@ -99,7 +99,7 @@ def run_batch(
     nextcloud: NextcloudClient,
     llm: LLMEngine,
     gsheets: GoogleSheetsClient,
-    target_folders: list[str],
+    target_folders: List[str],
     state_path: str,
     batch_size: int,
     request_delay: float

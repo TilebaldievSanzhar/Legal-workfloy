@@ -3,7 +3,7 @@ Google Sheets client for storing contract data.
 Supports multiple sheets organized by year.
 """
 
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from pathlib import Path
 
 import gspread
@@ -131,7 +131,7 @@ class GoogleSheetsClient:
             Number of rows written
         """
         # Group rows by year
-        by_year: dict[Optional[int], List[TableRow]] = {}
+        by_year: Dict[Optional[int], List[TableRow]] = {}
         for row in rows:
             year = row.year
             if year not in by_year:
@@ -237,14 +237,14 @@ class GoogleSheetsClient:
             ContractStatus.DELETED_FROM_SOURCE
         )
 
-    def get_all_file_ids(self) -> set[str]:
+    def get_all_file_ids(self) -> Set[str]:
         """
         Get all file IDs currently in the spreadsheet.
 
         Returns:
             Set of file ID hashes
         """
-        file_ids: set[str] = set()
+        file_ids: Set[str] = set()
 
         for worksheet in self.spreadsheet.worksheets():
             try:

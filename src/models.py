@@ -22,17 +22,38 @@ class ContractStatus(str, Enum):
     UNKNOWN = "требует проверки"
 
 
+class DocumentType(str, Enum):
+    """Document type enumeration."""
+
+    CONTRACT = "договор"
+    ADDENDUM = "доп соглашение"
+    SPECIFICATION = "спецификация"
+    ANNEX = "приложение"
+    PROTOCOL = "протокол"
+    ACT = "акт"
+    INVOICE = "счёт-фактура"
+    OTHER = "прочее"
+
+
 class ContractExtract(BaseModel):
     """
     Schema for data extracted from contract PDF via LLM.
     """
 
+    document_type: DocumentType = Field(
+        default=DocumentType.CONTRACT,
+        description="Тип документа (договор, доп соглашение, спецификация и т.д.)"
+    )
     contract_number: Optional[str] = Field(
         default=None,
         description="Номер договора"
     )
     counterparty_name: str = Field(
         description="Наименование контрагента"
+    )
+    city: Optional[str] = Field(
+        default=None,
+        description="Город из документа (Бишкек, Ош, Токмок и т.д.)"
     )
     start_date: Optional[date] = Field(
         default=None,
@@ -62,12 +83,20 @@ class TableRow(BaseModel):
     """
 
     # LLM-extracted fields
+    document_type: DocumentType = Field(
+        default=DocumentType.CONTRACT,
+        description="Тип документа"
+    )
     contract_number: Optional[str] = Field(
         default=None,
         description="Номер договора"
     )
     counterparty_name: str = Field(
         description="Наименование контрагента"
+    )
+    city: Optional[str] = Field(
+        default=None,
+        description="Город (из документа или из пути)"
     )
     start_date: Optional[date] = Field(
         default=None,
@@ -92,10 +121,6 @@ class TableRow(BaseModel):
     # Path-derived fields
     subsidiary: str = Field(
         description="Дочерняя компания (из имени корневой папки)"
-    )
-    city: Optional[str] = Field(
-        default=None,
-        description="Город из пути файла"
     )
     year: Optional[int] = Field(
         default=None,
@@ -124,7 +149,7 @@ class TableRow(BaseModel):
         cls,
         extract: ContractExtract,
         subsidiary: str,
-        city: Optional[str],
+        city_from_path: Optional[str],
         year: Optional[int],
         nextcloud_link: str,
         filename: str,
@@ -133,17 +158,23 @@ class TableRow(BaseModel):
     ) -> "TableRow":
         """
         Create TableRow from ContractExtract and metadata.
+
+        City priority: LLM-extracted city > path-derived city
         """
+        # Use city from LLM if available, fallback to path-derived city
+        final_city = extract.city if extract.city else city_from_path
+
         return cls(
+            document_type=extract.document_type,
             contract_number=extract.contract_number,
             counterparty_name=extract.counterparty_name,
+            city=final_city,
             start_date=extract.start_date,
             end_date=extract.end_date,
             is_perpetual=extract.is_perpetual,
             status=extract.status,
             summary=extract.summary,
             subsidiary=subsidiary,
-            city=city,
             year=year,
             nextcloud_link=nextcloud_link,
             filename=filename,
@@ -158,6 +189,7 @@ class TableRow(BaseModel):
         Order matches the column structure defined in spec.
         """
         return [
+            self.document_type.value,
             self.contract_number or "",
             self.counterparty_name,
             self.subsidiary,
@@ -178,6 +210,7 @@ class TableRow(BaseModel):
     def get_headers() -> List[str]:
         """Get column headers for Google Sheets."""
         return [
+            "Тип документа",
             "Номер договора",
             "Контрагент",
             "Дочерняя компания",

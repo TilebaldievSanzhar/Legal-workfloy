@@ -8,7 +8,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -57,7 +57,7 @@ def process_new_file(
     nextcloud: NextcloudClient,
     llm: LLMEngine,
     gsheets: GoogleSheetsClient,
-    target_folders: list[str]
+    target_folders: List[str]
 ) -> bool:
     """
     Process a new file: download, extract data, save to sheets.
@@ -93,7 +93,7 @@ def process_new_file(
         row = TableRow.from_extract(
             extract=extract,
             subsidiary=path_info.subsidiary,
-            city=path_info.city,
+            city_from_path=path_info.city,
             year=path_info.year,
             nextcloud_link=nc_link,
             filename=file_meta.filename,
@@ -142,7 +142,7 @@ def run_watcher_cycle(
     nextcloud: NextcloudClient,
     llm: LLMEngine,
     gsheets: GoogleSheetsClient,
-    target_folders: list[str],
+    target_folders: List[str],
     state_path: str
 ) -> None:
     """

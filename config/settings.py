@@ -5,7 +5,7 @@ Loads environment variables from .env file.
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 
 
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
 
 
 # Singleton instance
-_settings: Settings | None = None
+_settings: Optional[Settings] = None
 
 
 def get_settings() -> Settings:
