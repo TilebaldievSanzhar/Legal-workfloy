@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import get_settings
 from src.models import FileMetadata, TableRow
 from src.llm_engine import LLMEngine, RateLimitError
-from src.path_parser import PathInfo
+from src.path_parser import PathInfo, extract_year
 from src.services.nextcloud_client import NextcloudClient
 from src.services.gsheets_client import GoogleSheetsClient
 from src.utils import setup_logging, get_logger
@@ -102,7 +102,9 @@ def run_batch(
     target_folders: List[str],
     state_path: str,
     batch_size: int,
-    request_delay: float
+    request_delay: float,
+    process_years: Optional[List[int]] = None,
+    skip_duplicates: bool = True
 ) -> None:
     """
     Run batch processing of all files.
@@ -115,6 +117,8 @@ def run_batch(
         state_path: Path to state file
         batch_size: Number of files per batch
         request_delay: Delay between requests
+        process_years: Optional list of years to process (e.g., [2024, 2025])
+        skip_duplicates: Check for duplicates by filename+subsidiary+year
     """
     logger = get_logger("batch")
 
@@ -139,19 +143,67 @@ def run_batch(
         if file_id not in processed_ids
     ]
 
+    # Filter by years if specified
+    if process_years:
+        logger.info(f"Filtering by years: {process_years}")
+        original_count = len(files_to_process)
+        files_to_process = [
+            meta for meta in files_to_process
+            if extract_year(meta.path) in process_years
+        ]
+        logger.info(f"Filtered from {original_count} to {len(files_to_process)} files")
+
     logger.info(f"Files to process: {len(files_to_process)}")
 
     if not files_to_process:
         logger.info("No new files to process")
         return
 
+    # Pre-load existing filenames for duplicate checking (more efficient than per-file checks)
+    existing_files_cache: Dict[Optional[int], Dict[tuple, str]] = {}
+    if skip_duplicates:
+        logger.info("Loading existing filenames for duplicate detection...")
+        # Determine which years we need to check
+        years_to_check = set()
+        for meta in files_to_process:
+            year = extract_year(meta.path)
+            years_to_check.add(year)
+
+        for year in years_to_check:
+            existing_files_cache[year] = gsheets.get_existing_filenames_for_year(year)
+            if existing_files_cache[year]:
+                logger.info(f"Loaded {len(existing_files_cache[year])} existing files for year {year}")
+
     # Process files with progress bar
     processed_count = 0
     error_count = 0
+    skipped_duplicates = 0
     batch_rows: List[TableRow] = []
 
     with tqdm(total=len(files_to_process), desc="Processing") as pbar:
         for i, file_meta in enumerate(files_to_process):
+            # Check for duplicate by filename before processing
+            if skip_duplicates:
+                year = extract_year(file_meta.path)
+                path_info = PathInfo(file_meta.path, target_folders)
+
+                year_cache = existing_files_cache.get(year, {})
+                cache_key = (file_meta.filename, path_info.subsidiary)
+
+                if cache_key in year_cache:
+                    existing_file_id = year_cache[cache_key]
+                    logger.info(
+                        f"Skipping duplicate: {file_meta.filename} "
+                        f"(subsidiary={path_info.subsidiary}, year={year}) "
+                        f"- already exists with file_id={existing_file_id}"
+                    )
+                    # Mark as processed in state to avoid re-checking
+                    stored_state[file_meta.file_id] = file_meta.to_dict()
+                    skipped_duplicates += 1
+                    pbar.update(1)
+                    pbar.set_postfix({"ok": processed_count, "err": error_count, "dup": skipped_duplicates})
+                    continue
+
             try:
                 # Process file
                 row = process_file(file_meta, nextcloud, llm, target_folders)
@@ -162,6 +214,14 @@ def run_batch(
 
                     # Update state
                     stored_state[file_meta.file_id] = file_meta.to_dict()
+
+                    # Update cache to prevent duplicates within same batch
+                    if skip_duplicates:
+                        year = row.year
+                        cache_key = (row.filename, row.subsidiary)
+                        if year not in existing_files_cache:
+                            existing_files_cache[year] = {}
+                        existing_files_cache[year][cache_key] = file_meta.file_id
 
                     # Write batch to sheets
                     if len(batch_rows) >= batch_size:
@@ -197,7 +257,7 @@ def run_batch(
 
             # Update progress bar
             pbar.update(1)
-            pbar.set_postfix({"ok": processed_count, "err": error_count})
+            pbar.set_postfix({"ok": processed_count, "err": error_count, "dup": skipped_duplicates})
 
             # Regular delay between files
             time.sleep(request_delay)
@@ -212,6 +272,7 @@ def run_batch(
     logger.info("=" * 50)
     logger.info("Batch processing complete")
     logger.info(f"Processed: {processed_count}")
+    logger.info(f"Skipped duplicates: {skipped_duplicates}")
     logger.info(f"Errors: {error_count}")
     logger.info(f"Total in state: {len(stored_state)}")
 
@@ -251,6 +312,15 @@ def main():
     logger.info(f"Batch size: {settings.batch_size}")
     logger.info(f"Request delay: {settings.api_request_delay}s")
 
+    # Year filter info
+    process_years = settings.process_years_list
+    if process_years:
+        logger.info(f"Year filter active: processing only {process_years}")
+    else:
+        logger.info("No year filter - processing all years")
+
+    logger.info(f"Duplicate detection: {'enabled' if settings.skip_duplicates else 'disabled'}")
+
     # Run batch processing
     try:
         run_batch(
@@ -260,7 +330,9 @@ def main():
             target_folders=target_folders,
             state_path=settings.state_file_path,
             batch_size=settings.batch_size,
-            request_delay=settings.api_request_delay
+            request_delay=settings.api_request_delay,
+            process_years=process_years,
+            skip_duplicates=settings.skip_duplicates
         )
     except KeyboardInterrupt:
         logger.info("Batch processing interrupted by user")

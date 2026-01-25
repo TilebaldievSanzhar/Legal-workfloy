@@ -8,7 +8,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import get_settings
 from src.models import FileMetadata, TableRow
 from src.llm_engine import LLMEngine
-from src.path_parser import PathInfo
+from src.path_parser import PathInfo, extract_year
 from src.services.nextcloud_client import NextcloudClient
 from src.services.gsheets_client import GoogleSheetsClient
 from src.utils import setup_logging, get_logger
@@ -176,6 +176,29 @@ def run_watcher_cycle(
     # Process new files
     for file_id in new_ids:
         file_meta = current_files[file_id]
+
+        # Check for duplicates (file might have been moved, e.g., when city folders are added)
+        if settings.skip_duplicates:
+            path_info = PathInfo(file_meta.path, target_folders)
+            year = extract_year(file_meta.path)
+
+            duplicate = gsheets.find_duplicate_by_filename(
+                filename=file_meta.filename,
+                subsidiary=path_info.subsidiary,
+                year=year
+            )
+
+            if duplicate:
+                worksheet, row_num, existing_file_id = duplicate
+                logger.info(
+                    f"Skipping duplicate (file moved?): {file_meta.filename} "
+                    f"already exists in {worksheet.title} row {row_num}"
+                )
+                # Still update state to track this file
+                stored_state[file_id] = file_meta.to_dict()
+                save_state(state_path, stored_state)
+                continue
+
         success = process_new_file(
             file_meta,
             nextcloud,

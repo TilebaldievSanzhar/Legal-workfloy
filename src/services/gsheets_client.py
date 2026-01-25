@@ -273,3 +273,113 @@ class GoogleSheetsClient:
             True if exists, False otherwise
         """
         return self.find_row_by_file_id(file_id) is not None
+
+    def find_duplicate_by_filename(
+        self,
+        filename: str,
+        subsidiary: str,
+        year: Optional[int]
+    ) -> Optional[Tuple[gspread.Worksheet, int, str]]:
+        """
+        Find a potential duplicate entry by filename, subsidiary, and year.
+
+        This helps detect files that were moved (e.g., when city folders are added)
+        but represent the same contract.
+
+        Args:
+            filename: File name to search for
+            subsidiary: Subsidiary/company name
+            year: Year from path
+
+        Returns:
+            Tuple of (worksheet, row_number, existing_file_id) if found, None otherwise
+        """
+        # Try to find in the year-specific sheet first
+        sheet_name = str(year) if year else "Без года"
+
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+        except gspread.WorksheetNotFound:
+            return None
+
+        try:
+            # Get all data from the sheet
+            all_values = worksheet.get_all_values()
+            if len(all_values) <= 1:  # Only header or empty
+                return None
+
+            # Column indices (0-based):
+            # 2 = Контрагент (counterparty)
+            # 3 = Дочерняя компания (subsidiary)
+            # 10 = Имя файла (filename)
+            # 12 = file_id_hash
+            filename_col = 10
+            subsidiary_col = 3
+            file_id_col = 12
+
+            for row_idx, row in enumerate(all_values[1:], start=2):  # Skip header
+                if len(row) > max(filename_col, subsidiary_col, file_id_col):
+                    row_filename = row[filename_col] if len(row) > filename_col else ""
+                    row_subsidiary = row[subsidiary_col] if len(row) > subsidiary_col else ""
+                    row_file_id = row[file_id_col] if len(row) > file_id_col else ""
+
+                    # Check for match
+                    if row_filename == filename and row_subsidiary == subsidiary:
+                        logger.info(
+                            f"Found potential duplicate: {filename} "
+                            f"(subsidiary={subsidiary}, year={year}) "
+                            f"at row {row_idx}"
+                        )
+                        return (worksheet, row_idx, row_file_id)
+
+        except Exception as e:
+            logger.warning(f"Error checking for duplicates: {e}")
+
+        return None
+
+    def get_existing_filenames_for_year(
+        self,
+        year: Optional[int]
+    ) -> Dict[Tuple[str, str], str]:
+        """
+        Get all existing filename+subsidiary combinations for a specific year.
+
+        This is more efficient for batch processing than checking one by one.
+
+        Args:
+            year: Year to check
+
+        Returns:
+            Dictionary mapping (filename, subsidiary) to file_id_hash
+        """
+        result: Dict[Tuple[str, str], str] = {}
+        sheet_name = str(year) if year else "Без года"
+
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+        except gspread.WorksheetNotFound:
+            return result
+
+        try:
+            all_values = worksheet.get_all_values()
+            if len(all_values) <= 1:
+                return result
+
+            # Column indices
+            filename_col = 10
+            subsidiary_col = 3
+            file_id_col = 12
+
+            for row in all_values[1:]:
+                if len(row) > max(filename_col, subsidiary_col, file_id_col):
+                    filename = row[filename_col] if len(row) > filename_col else ""
+                    subsidiary = row[subsidiary_col] if len(row) > subsidiary_col else ""
+                    file_id = row[file_id_col] if len(row) > file_id_col else ""
+
+                    if filename and subsidiary:
+                        result[(filename, subsidiary)] = file_id
+
+        except Exception as e:
+            logger.warning(f"Error getting existing filenames for year {year}: {e}")
+
+        return result

@@ -61,10 +61,38 @@ class Settings(BaseSettings):
         description="Path to state file for tracking processed files"
     )
 
+    # Year filter for batch processing (optional)
+    process_years: Optional[str] = Field(
+        default=None,
+        description="Comma-separated list of years to process (e.g., '2024,2025'). If empty, process all years."
+    )
+
+    # Deduplication settings
+    skip_duplicates: bool = Field(
+        default=True,
+        description="Skip files that already exist in Google Sheets by filename+subsidiary+year"
+    )
+
     @property
     def target_folders_list(self) -> List[str]:
         """Parse comma-separated target folders into a list."""
         return [f.strip() for f in self.target_folders.split(",") if f.strip()]
+
+    @property
+    def process_years_list(self) -> Optional[List[int]]:
+        """Parse comma-separated years into a list of integers.
+
+        Returns:
+            List of years to process, or None to process all years.
+        """
+        if not self.process_years:
+            return None
+        years = []
+        for y in self.process_years.split(","):
+            y = y.strip()
+            if y.isdigit():
+                years.append(int(y))
+        return years if years else None
 
     @property
     def google_credentials_full_path(self) -> Path:

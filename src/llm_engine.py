@@ -38,7 +38,7 @@ EXTRACTION_PROMPT = """Проанализируй PDF-документ и изв
    - "счёт-фактура" - счёт-фактура
    - "прочее" - если тип неясен
 
-2. contract_number - номер договора (строка или null если не найден)
+2. contract_number - номер договора (строка или "null" если не найден)
 
 3. counterparty_name - наименование контрагента (вторая сторона договора)
 
@@ -47,9 +47,9 @@ EXTRACTION_PROMPT = """Проанализируй PDF-документ и изв
    Города Кыргызстана: Бишкек, Ош, Токмок, Кант, Каракол, Джалал-Абад, Нарын, Талас, Баткен и др.
    Может быть указан как "г. Бишкек", "г.Ош" или просто "Бишкек".
 
-5. start_date - дата заключения договора в формате YYYY-MM-DD (или null)
+5. start_date - дата заключения договора в формате YYYY-MM-DD (или "null")
 
-6. end_date - дата окончания договора в формате YYYY-MM-DD (или null если бессрочный)
+6. end_date - дата окончания договора в формате YYYY-MM-DD (или "null" если бессрочный)
 
 7. is_perpetual - true если договор бессрочный, false если срочный
 
@@ -173,7 +173,8 @@ class LLMEngine:
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.1,
-                    max_output_tokens=1024
+                    max_output_tokens=2048, # Увеличили лимит
+                    response_mime_type="application/json" # Включили строгий JSON режим
                 )
             )
 

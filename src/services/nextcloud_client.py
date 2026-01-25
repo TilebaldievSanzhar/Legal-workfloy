@@ -22,25 +22,23 @@ class NextcloudClient:
     """WebDAV client for Nextcloud operations."""
 
     def __init__(
-        self,
-        host: str,
-        username: str,
-        password: str
+            self,
+            host: str,
+            username: str,
+            password: str
     ):
         """
         Initialize Nextcloud WebDAV client.
-
-        Args:
-            host: Nextcloud server URL (e.g., https://cloud.example.com)
-            username: Nextcloud username
-            password: Nextcloud password
         """
         self.host = host.rstrip("/")
         self.username = username
 
+        # Сохраняем префикс, который сервер добавляет к путям
+        self.webdav_root = f"/remote.php/dav/files/{username}"
+
         # Configure WebDAV client
         webdav_options = {
-            "webdav_hostname": f"{self.host}/remote.php/dav/files/{username}/",
+            "webdav_hostname": f"{self.host}{self.webdav_root}/",  # Используем переменную
             "webdav_login": username,
             "webdav_password": password,
             "webdav_timeout": 30
@@ -70,18 +68,13 @@ class NextcloudClient:
         return result
 
     def _scan_recursive(
-        self,
-        folder_path: str,
-        file_extension: str,
-        result: Dict[str, FileMetadata]
+            self,
+            folder_path: str,
+            file_extension: str,
+            result: Dict[str, FileMetadata]
     ) -> None:
         """
         Internal recursive scanning method.
-
-        Args:
-            folder_path: Current folder path
-            file_extension: File extension filter
-            result: Dictionary to populate with results
         """
         try:
             # Normalize path
@@ -93,17 +86,28 @@ class NextcloudClient:
             items = self.client.list(folder_path, get_info=True)
 
             for item in items:
-                # Skip the parent directory entry
-                if item.get("path", "").rstrip("/") == folder_path:
+                # Получаем полный путь от сервера
+                full_path = item.get("path", "")
+
+                # Skip the parent directory entry (сравниваем с учетом возможного префикса)
+                # Если full_path заканчивается на текущий folder_path, это сама папка
+                if full_path.rstrip("/").endswith(folder_path):
                     continue
 
-                path = item.get("path", "")
+                # --- ВАЖНОЕ ИСПРАВЛЕНИЕ: Очищаем путь от префикса WebDAV ---
+                relative_path = full_path
+                if full_path.startswith(self.webdav_root):
+                    relative_path = full_path[len(self.webdav_root):]
+
+                # Обновляем путь в item, чтобы метаданные создавались корректно
+                item["path"] = relative_path
+
                 is_dir = item.get("isdir", False)
 
                 if is_dir:
-                    # Recurse into subdirectory
-                    self._scan_recursive(path, file_extension, result)
-                elif path.lower().endswith(file_extension.lower()):
+                    # Recurse into subdirectory используя корректный путь
+                    self._scan_recursive(relative_path, file_extension, result)
+                elif relative_path.lower().endswith(file_extension.lower()):
                     # Process file
                     file_meta = self._create_file_metadata(item)
                     result[file_meta.file_id] = file_meta
