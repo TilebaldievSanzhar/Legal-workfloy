@@ -222,6 +222,53 @@ class GoogleSheetsClient:
         )
         return True
 
+    def update_row_metadata(
+        self,
+        old_file_id: str,
+        new_filename: str,
+        new_link: str,
+        new_source_folder: str,
+        new_file_id_hash: str
+    ) -> bool:
+        """
+        Update file metadata in an existing row (for renamed files).
+
+        Finds the row by old file_id_hash and updates:
+        filename, nextcloud link, source folder, and file_id_hash.
+
+        Args:
+            old_file_id: Current file_id_hash in the sheet
+            new_filename: New filename after rename
+            new_link: New Nextcloud link
+            new_source_folder: New source folder path
+            new_file_id_hash: New file_id_hash
+
+        Returns:
+            True if updated, False if not found
+        """
+        result = self.find_row_by_file_id(old_file_id)
+
+        if not result:
+            logger.warning(
+                f"Cannot update metadata: file_id {old_file_id} not found"
+            )
+            return False
+
+        worksheet, row_num = result
+
+        # Batch update: K=link, L=filename, M=source_folder, N=file_id_hash
+        worksheet.update(
+            f"K{row_num}:N{row_num}",
+            [[new_link, new_filename, new_source_folder, new_file_id_hash]],
+            value_input_option="USER_ENTERED"
+        )
+
+        logger.info(
+            f"Updated metadata for renamed file: {old_file_id} -> "
+            f"{new_file_id_hash} ({new_filename}) in sheet {worksheet.title}"
+        )
+        return True
+
     def mark_as_deleted(self, file_id: str) -> bool:
         """
         Mark a contract as deleted from source.

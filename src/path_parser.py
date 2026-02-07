@@ -31,11 +31,11 @@ def extract_subsidiary(path: str, target_folders: List[str]) -> str:
             # e.g., "/Company1/Contracts" -> "Company1"
             parts = folder_normalized.strip("/").split("/")
             if parts:
-                return parts[0]
+                return parts[-1]
 
     # Fallback: extract first folder from path
     parts = path_normalized.strip("/").split("/")
-    return parts[0] if parts else "Unknown"
+    return parts[-1] if parts else "Unknown"
 
 
 def extract_city(path: str) -> Optional[str]:

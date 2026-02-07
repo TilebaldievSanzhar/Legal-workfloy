@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config.settings import get_settings
 from src.models import FileMetadata, TableRow
 from src.llm_engine import LLMEngine
-from src.path_parser import PathInfo, extract_year
+from src.path_parser import PathInfo, extract_year, get_folder_from_path
 from src.services.nextcloud_client import NextcloudClient
 from src.services.gsheets_client import GoogleSheetsClient
 from src.utils import setup_logging, get_logger
@@ -172,6 +172,75 @@ def run_watcher_cycle(
     deleted_ids = stored_ids - current_ids
 
     logger.info(f"Found {len(new_ids)} new files, {len(deleted_ids)} deleted files")
+
+    # --- Detect renames: match new and deleted files by size + parent folder ---
+    renamed_pairs = []  # list of (old_file_id, new_file_id)
+
+    if new_ids and deleted_ids:
+        # Build lookup from deleted files: (size, parent_folder) -> (file_id, meta_dict)
+        deleted_lookup: Dict[tuple, List[tuple]] = {}
+        for del_id in deleted_ids:
+            meta = stored_state.get(del_id, {})
+            size = meta.get("size")
+            path = meta.get("path", "")
+            parent = get_folder_from_path(path) if path else ""
+            if size is not None and parent:
+                key = (size, parent)
+                if key not in deleted_lookup:
+                    deleted_lookup[key] = []
+                deleted_lookup[key].append((del_id, meta))
+
+        # Match new files against deleted files
+        for new_id in list(new_ids):
+            new_meta = current_files[new_id]
+            parent = get_folder_from_path(new_meta.path)
+            key = (new_meta.size, parent)
+
+            if key in deleted_lookup and deleted_lookup[key]:
+                old_id, old_meta = deleted_lookup[key].pop(0)
+                if not deleted_lookup[key]:
+                    del deleted_lookup[key]
+                renamed_pairs.append((old_id, new_id))
+
+    # Process renames
+    for old_id, new_id in renamed_pairs:
+        new_meta = current_files[new_id]
+        nc_link = nextcloud.generate_public_link(new_meta.path)
+        path_info = PathInfo(new_meta.path, target_folders)
+
+        success = gsheets.update_row_metadata(
+            old_file_id=old_id,
+            new_filename=new_meta.filename,
+            new_link=nc_link,
+            new_source_folder=path_info.folder,
+            new_file_id_hash=new_id
+        )
+
+        if success:
+            logger.info(
+                f"Renamed file detected: '{stored_state.get(old_id, {}).get('filename', '?')}' "
+                f"-> '{new_meta.filename}'"
+            )
+        else:
+            logger.warning(
+                f"Rename detected but row update failed for {old_id} -> {new_id}, "
+                f"will process as new file"
+            )
+            # Don't remove from new_ids/deleted_ids — let normal flow handle it
+            continue
+
+        # Update state: remove old, add new
+        if old_id in stored_state:
+            del stored_state[old_id]
+        stored_state[new_id] = new_meta.to_dict()
+
+        # Remove from new/deleted sets so they aren't processed again
+        new_ids.discard(new_id)
+        deleted_ids.discard(old_id)
+
+    if renamed_pairs:
+        save_state(state_path, stored_state)
+        logger.info(f"Processed {len(renamed_pairs)} renamed files")
 
     # Process new files
     for file_id in new_ids:
