@@ -88,12 +88,12 @@ class GoogleSheetsClient:
             worksheet.update("A1", [headers])
 
             # Format header row (bold)
-            worksheet.format("A1:N1", {
+            worksheet.format("A1:P1", {
                 "textFormat": {"bold": True},
                 "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}
             })
 
-            # Hide file_id_hash column (column M, index 13)
+            # Hide file_id_hash column (column O, index 15)
             # Note: gspread doesn't support hiding columns directly,
             # but we can document this for manual setup
 
@@ -172,7 +172,7 @@ class GoogleSheetsClient:
         # Search in all worksheets
         for worksheet in self.spreadsheet.worksheets():
             try:
-                # Get all values in file_id column (column M, index 13)
+                # Get all values in file_id column (column O, index 15)
                 cell = worksheet.find(file_id)
                 if cell:
                     logger.debug(
@@ -212,8 +212,8 @@ class GoogleSheetsClient:
 
         worksheet, row_num = result
 
-        # Status is in column H (index 8)
-        status_col = "H"
+        # Status is in column J (index 9)
+        status_col = "J"
         worksheet.update(f"{status_col}{row_num}", new_status.value)
 
         logger.info(
@@ -256,9 +256,9 @@ class GoogleSheetsClient:
 
         worksheet, row_num = result
 
-        # Batch update: K=link, L=filename, M=source_folder, N=file_id_hash
+        # Batch update: L=link, M=filename, N=source_folder, O=file_id_hash
         worksheet.update(
-            f"K{row_num}:N{row_num}",
+            f"L{row_num}:O{row_num}",
             [[new_link, new_filename, new_source_folder, new_file_id_hash]],
             value_input_option="USER_ENTERED"
         )
@@ -295,8 +295,8 @@ class GoogleSheetsClient:
 
         for worksheet in self.spreadsheet.worksheets():
             try:
-                # Get file_id column (column M)
-                col_values = worksheet.col_values(13)  # Column M is index 13
+                # Get file_id column (column O)
+                col_values = worksheet.col_values(15)  # Column O is index 15
 
                 # Skip header
                 for value in col_values[1:]:
@@ -358,11 +358,11 @@ class GoogleSheetsClient:
             # Column indices (0-based):
             # 2 = Контрагент (counterparty)
             # 3 = Дочерняя компания (subsidiary)
-            # 10 = Имя файла (filename)
-            # 12 = file_id_hash
-            filename_col = 10
+            # 12 = Имя файла (filename)
+            # 14 = file_id_hash
+            filename_col = 12
             subsidiary_col = 3
-            file_id_col = 12
+            file_id_col = 14
 
             for row_idx, row in enumerate(all_values[1:], start=2):  # Skip header
                 if len(row) > max(filename_col, subsidiary_col, file_id_col):
@@ -413,9 +413,9 @@ class GoogleSheetsClient:
                 return result
 
             # Column indices
-            filename_col = 10
+            filename_col = 12
             subsidiary_col = 3
-            file_id_col = 12
+            file_id_col = 14
 
             for row in all_values[1:]:
                 if len(row) > max(filename_col, subsidiary_col, file_id_col):

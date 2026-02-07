@@ -8,6 +8,33 @@ from typing import Optional, List
 from pathlib import PurePosixPath
 
 
+def extract_contract_category(path: str, target_folders: List[str]) -> str:
+    """
+    Extract contract category from the parent folder of the subsidiary folder.
+
+    For path like /Freigaben/OASIS AGRO/ДОГОВОРЫ/ДОГОВОРЫ SCAN/ДОГОВОРЫ ПОКУПАТЕЛИ 1410/НА/file.pdf
+    with target folder /Freigaben/OASIS AGRO/ДОГОВОРЫ/ДОГОВОРЫ SCAN/ДОГОВОРЫ ПОКУПАТЕЛИ 1410/НА/
+    parts[-2] = "ДОГОВОРЫ ПОКУПАТЕЛИ 1410" (category), parts[-1] = "НА" (subsidiary).
+
+    Args:
+        path: Full file path
+        target_folders: List of monitored folders
+
+    Returns:
+        Contract category name, or "Без категории" if not found
+    """
+    path_normalized = path.replace("\\", "/")
+
+    for folder in target_folders:
+        folder_normalized = folder.replace("\\", "/").rstrip("/")
+        if path_normalized.startswith(folder_normalized):
+            parts = folder_normalized.strip("/").split("/")
+            if len(parts) >= 2:
+                return parts[-2]
+
+    return "Без категории"
+
+
 def extract_subsidiary(path: str, target_folders: List[str]) -> str:
     """
     Extract subsidiary (company) name from the root folder of the path.
@@ -231,6 +258,7 @@ class PathInfo:
         """
         self.path = path
         self.subsidiary = extract_subsidiary(path, target_folders)
+        self.contract_category = extract_contract_category(path, target_folders)
         self.city = extract_city(path)
         self.year = extract_year(path)
         self.folder = get_folder_from_path(path)
@@ -239,6 +267,7 @@ class PathInfo:
     def __repr__(self) -> str:
         return (
             f"PathInfo(subsidiary={self.subsidiary!r}, "
+            f"contract_category={self.contract_category!r}, "
             f"city={self.city!r}, year={self.year}, "
             f"filename={self.filename!r})"
         )

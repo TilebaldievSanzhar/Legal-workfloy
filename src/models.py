@@ -122,6 +122,9 @@ class TableRow(BaseModel):
     subsidiary: str = Field(
         description="Дочерняя компания (из имени корневой папки)"
     )
+    contract_category: str = Field(
+        description="Категория договора (из родительской папки, например ДОГОВОРЫ ПОКУПАТЕЛИ 1410)"
+    )
     year: Optional[int] = Field(
         default=None,
         description="Год из пути файла (для выбора листа)"
@@ -149,6 +152,7 @@ class TableRow(BaseModel):
         cls,
         extract: ContractExtract,
         subsidiary: str,
+        contract_category: str,
         city_from_path: Optional[str],
         year: Optional[int],
         nextcloud_link: str,
@@ -175,6 +179,7 @@ class TableRow(BaseModel):
             status=extract.status,
             summary=extract.summary,
             subsidiary=subsidiary,
+            contract_category=contract_category,
             year=year,
             nextcloud_link=nextcloud_link,
             filename=filename,
@@ -193,6 +198,7 @@ class TableRow(BaseModel):
             self.contract_number or "",
             self.counterparty_name,
             self.subsidiary,
+            self.contract_category,
             self.city or "",
             self.start_date.isoformat() if self.start_date else "",
             self.end_date.isoformat() if self.end_date else "",
@@ -214,6 +220,7 @@ class TableRow(BaseModel):
             "Номер договора",
             "Контрагент",
             "Дочерняя компания",
+            "Категория",
             "Город",
             "Дата заключения",
             "Дата окончания",

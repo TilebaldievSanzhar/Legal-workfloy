@@ -93,6 +93,7 @@ def process_new_file(
         row = TableRow.from_extract(
             extract=extract,
             subsidiary=path_info.subsidiary,
+            contract_category=path_info.contract_category,
             city_from_path=path_info.city,
             year=path_info.year,
             nextcloud_link=nc_link,
