@@ -190,9 +190,10 @@ class TableRow(BaseModel):
 
     def to_sheets_row(self) -> List[str]:
         """
-        Convert to a list of strings for Google Sheets.
-        Order matches the column structure defined in spec.
+        Convert to a list of strings for Google Sheets (13 visible columns A-M).
+        source_folder, file_id_hash, processed_at are stored in the _meta sheet.
         """
+        hyperlink = f'=HYPERLINK("{self.nextcloud_link}","Открыть")'
         return [
             self.document_type.value,
             self.contract_number or "",
@@ -205,16 +206,13 @@ class TableRow(BaseModel):
             "Да" if self.is_perpetual else "Нет",
             self.status.value,
             self.summary,
-            self.nextcloud_link,
+            hyperlink,
             self.filename,
-            self.source_folder,
-            self.file_id_hash,
-            self.processed_at
         ]
 
     @staticmethod
     def get_headers() -> List[str]:
-        """Get column headers for Google Sheets."""
+        """Get column headers for Google Sheets (13 visible columns A-M)."""
         return [
             "Тип документа",
             "Номер договора",
@@ -229,9 +227,6 @@ class TableRow(BaseModel):
             "Суть договора",
             "Ссылка Nextcloud",
             "Имя файла",
-            "Папка-источник",
-            "file_id_hash",
-            "Дата обработки"
         ]
 
 

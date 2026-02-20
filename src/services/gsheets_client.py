@@ -1,6 +1,7 @@
 """
 Google Sheets client for storing contract data.
 Supports multiple sheets organized by year.
+Metadata (file_id_hash, processed_at, source_folder) is stored in a hidden _meta sheet.
 """
 
 from typing import Dict, List, Optional, Set, Tuple
@@ -20,6 +21,23 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
+# Internal metadata sheet name (not visible to users as data sheet)
+META_SHEET_NAME = "_meta"
+META_HEADERS = ["file_id_hash", "sheet_name", "row_number", "processed_at", "source_folder"]
+
+# Column indices in main sheet (0-based, A-M, 13 columns)
+COL_SUBSIDIARY = 3    # D
+COL_STATUS = 9        # J
+COL_LINK = 11         # L
+COL_FILENAME = 12     # M
+
+# Column indices in _meta sheet (0-based)
+META_COL_FILE_ID = 0
+META_COL_SHEET = 1
+META_COL_ROW = 2
+META_COL_PROCESSED_AT = 3
+META_COL_SOURCE_FOLDER = 4
+
 
 class GoogleSheetsClient:
     """Client for Google Sheets operations."""
@@ -29,16 +47,8 @@ class GoogleSheetsClient:
         credentials_path: str,
         spreadsheet_id: str
     ):
-        """
-        Initialize Google Sheets client.
-
-        Args:
-            credentials_path: Path to service account credentials JSON
-            spreadsheet_id: ID of the target spreadsheet
-        """
         self.spreadsheet_id = spreadsheet_id
 
-        # Load credentials
         creds_path = Path(credentials_path)
         if not creds_path.exists():
             raise FileNotFoundError(
@@ -50,87 +60,95 @@ class GoogleSheetsClient:
             scopes=SCOPES
         )
 
-        # Initialize gspread client
         self.gc = gspread.authorize(credentials)
         self.spreadsheet = self.gc.open_by_key(spreadsheet_id)
 
         logger.info(f"Google Sheets client initialized for spreadsheet: {spreadsheet_id}")
 
+    # ------------------------------------------------------------------
+    # Sheet management
+    # ------------------------------------------------------------------
+
     def get_or_create_sheet(self, year: Optional[int]) -> gspread.Worksheet:
-        """
-        Get or create a worksheet for the given year.
-
-        Args:
-            year: Year for the sheet (e.g., 2024). If None, uses "Без года"
-
-        Returns:
-            Worksheet instance
-        """
+        """Get or create a data worksheet for the given year."""
         sheet_name = str(year) if year else "Без года"
 
         try:
-            # Try to get existing sheet
             worksheet = self.spreadsheet.worksheet(sheet_name)
             logger.debug(f"Found existing sheet: {sheet_name}")
             return worksheet
 
         except gspread.WorksheetNotFound:
-            # Create new sheet with headers
             logger.info(f"Creating new sheet: {sheet_name}")
             worksheet = self.spreadsheet.add_worksheet(
                 title=sheet_name,
                 rows=1000,
-                cols=20
+                cols=15
             )
 
-            # Add headers
             headers = TableRow.get_headers()
             worksheet.update("A1", [headers])
 
-            # Format header row (bold)
-            worksheet.format("A1:P1", {
+            # Format header row (bold, grey background) — A1:M1 (13 columns)
+            worksheet.format("A1:M1", {
                 "textFormat": {"bold": True},
                 "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}
             })
 
-            # Hide file_id_hash column (column O, index 15)
-            # Note: gspread doesn't support hiding columns directly,
-            # but we can document this for manual setup
-
             return worksheet
 
-    def append_row(self, row: TableRow) -> None:
-        """
-        Append a row to the appropriate sheet based on year.
+    def _get_or_create_meta_sheet(self) -> gspread.Worksheet:
+        """Get or create the internal _meta worksheet."""
+        try:
+            return self.spreadsheet.worksheet(META_SHEET_NAME)
+        except gspread.WorksheetNotFound:
+            logger.info(f"Creating metadata sheet: {META_SHEET_NAME}")
+            worksheet = self.spreadsheet.add_worksheet(
+                title=META_SHEET_NAME,
+                rows=5000,
+                cols=6
+            )
+            worksheet.update("A1", [META_HEADERS])
+            worksheet.format("A1:E1", {
+                "textFormat": {"bold": True},
+                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.95}
+            })
+            return worksheet
 
-        Args:
-            row: TableRow to append
-        """
+    # ------------------------------------------------------------------
+    # Write operations
+    # ------------------------------------------------------------------
+
+    def append_row(self, row: TableRow) -> None:
+        """Append a row to the appropriate sheet and record metadata."""
         worksheet = self.get_or_create_sheet(row.year)
 
-        # Convert to list of values
-        values = row.to_sheets_row()
+        # Determine row number before appending
+        current_row_count = len(worksheet.get_all_values())
+        new_row_num = current_row_count + 1
 
-        # Append row
+        values = row.to_sheets_row()
         worksheet.append_row(values, value_input_option="USER_ENTERED")
-        logger.info(f"Appended row for {row.filename} to sheet {row.year}")
+
+        # Write metadata to _meta sheet
+        sheet_name = str(row.year) if row.year else "Без года"
+        self._write_meta_row(
+            file_id_hash=row.file_id_hash,
+            sheet_name=sheet_name,
+            row_number=new_row_num,
+            processed_at=row.processed_at,
+            source_folder=row.source_folder
+        )
+
+        logger.info(f"Appended row for {row.filename} to sheet {row.year} (row {new_row_num})")
 
     def append_rows_batch(
         self,
         rows: List[TableRow],
         batch_size: int = 10
     ) -> int:
-        """
-        Append multiple rows in batches for efficiency.
-
-        Args:
-            rows: List of TableRow objects
-            batch_size: Number of rows to write per batch
-
-        Returns:
-            Number of rows written
-        """
-        # Group rows by year
+        """Append multiple rows in batches, recording metadata for each."""
+        # Group by year
         by_year: Dict[Optional[int], List[TableRow]] = {}
         for row in rows:
             year = row.year
@@ -142,68 +160,129 @@ class GoogleSheetsClient:
 
         for year, year_rows in by_year.items():
             worksheet = self.get_or_create_sheet(year)
+            sheet_name = str(year) if year else "Без года"
 
-            # Convert to values
             values = [row.to_sheets_row() for row in year_rows]
 
             # Write in batches
             for i in range(0, len(values), batch_size):
-                batch = values[i:i + batch_size]
-                worksheet.append_rows(batch, value_input_option="USER_ENTERED")
-                total_written += len(batch)
-                logger.debug(f"Wrote batch of {len(batch)} rows to sheet {year}")
+                batch_values = values[i:i + batch_size]
+                batch_rows = year_rows[i:i + batch_size]
+
+                # Row number of first row in this batch
+                current_count = len(worksheet.get_all_values())
+                first_row_num = current_count + 1
+
+                worksheet.append_rows(batch_values, value_input_option="USER_ENTERED")
+
+                # Write metadata for each row in the batch
+                meta_rows = []
+                for j, row in enumerate(batch_rows):
+                    meta_rows.append([
+                        row.file_id_hash,
+                        sheet_name,
+                        str(first_row_num + j),
+                        row.processed_at,
+                        row.source_folder
+                    ])
+
+                meta_sheet = self._get_or_create_meta_sheet()
+                meta_sheet.append_rows(meta_rows, value_input_option="RAW")
+
+                total_written += len(batch_values)
+                logger.debug(f"Wrote batch of {len(batch_values)} rows to sheet {year}")
 
         logger.info(f"Total rows written: {total_written}")
         return total_written
+
+    def _write_meta_row(
+        self,
+        file_id_hash: str,
+        sheet_name: str,
+        row_number: int,
+        processed_at: str,
+        source_folder: str
+    ) -> None:
+        """Append one record to the _meta sheet."""
+        meta_sheet = self._get_or_create_meta_sheet()
+        meta_sheet.append_row(
+            [file_id_hash, sheet_name, str(row_number), processed_at, source_folder],
+            value_input_option="RAW"
+        )
+
+    # ------------------------------------------------------------------
+    # Lookup operations
+    # ------------------------------------------------------------------
 
     def find_row_by_file_id(
         self,
         file_id: str
     ) -> Optional[Tuple[gspread.Worksheet, int]]:
         """
-        Find a row by file_id_hash across all sheets.
-
-        Args:
-            file_id: File ID hash to search for
+        Find a data row by file_id_hash using the _meta sheet.
 
         Returns:
-            Tuple of (worksheet, row_number) if found, None otherwise
+            Tuple of (worksheet, row_number) if found, None otherwise.
         """
-        # Search in all worksheets
-        for worksheet in self.spreadsheet.worksheets():
-            try:
-                # Get all values in file_id column (column O, index 15)
-                cell = worksheet.find(file_id)
-                if cell:
-                    logger.debug(
-                        f"Found file_id {file_id} in sheet {worksheet.title} "
-                        f"at row {cell.row}"
-                    )
-                    return (worksheet, cell.row)
-            except gspread.CellNotFound:
-                continue
-            except Exception as e:
-                logger.warning(f"Error searching sheet {worksheet.title}: {e}")
-                continue
+        meta_sheet = self._get_or_create_meta_sheet()
 
-        logger.debug(f"File ID {file_id} not found in any sheet")
-        return None
+        try:
+            cell = meta_sheet.find(file_id, in_column=META_COL_FILE_ID + 1)
+        except gspread.CellNotFound:
+            logger.debug(f"File ID {file_id} not found in _meta")
+            return None
+        except Exception as e:
+            logger.warning(f"Error searching _meta for {file_id}: {e}")
+            return None
+
+        meta_row = meta_sheet.row_values(cell.row)
+        if len(meta_row) < 3:
+            logger.warning(f"Incomplete _meta row for {file_id}")
+            return None
+
+        sheet_name = meta_row[META_COL_SHEET]
+        try:
+            row_number = int(meta_row[META_COL_ROW])
+        except ValueError:
+            logger.warning(f"Invalid row_number in _meta for {file_id}: {meta_row[META_COL_ROW]}")
+            return None
+
+        try:
+            worksheet = self.spreadsheet.worksheet(sheet_name)
+        except gspread.WorksheetNotFound:
+            logger.warning(f"Sheet '{sheet_name}' not found for file_id {file_id}")
+            return None
+
+        logger.debug(f"Found file_id {file_id} in sheet '{sheet_name}' row {row_number}")
+        return (worksheet, row_number)
+
+    def _find_meta_row(self, file_id: str) -> Optional[Tuple[gspread.Worksheet, int]]:
+        """
+        Find the row in _meta sheet for the given file_id.
+
+        Returns:
+            Tuple of (_meta worksheet, meta_row_number) if found, None otherwise.
+        """
+        meta_sheet = self._get_or_create_meta_sheet()
+        try:
+            cell = meta_sheet.find(file_id, in_column=META_COL_FILE_ID + 1)
+            return (meta_sheet, cell.row)
+        except gspread.CellNotFound:
+            return None
+        except Exception as e:
+            logger.warning(f"Error finding meta row for {file_id}: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # Update operations
+    # ------------------------------------------------------------------
 
     def update_status_by_file_id(
         self,
         file_id: str,
         new_status: ContractStatus
     ) -> bool:
-        """
-        Update the status of a contract by its file_id.
-
-        Args:
-            file_id: File ID hash
-            new_status: New status to set
-
-        Returns:
-            True if updated, False if not found
-        """
+        """Update the status of a contract row (column J)."""
         result = self.find_row_by_file_id(file_id)
 
         if not result:
@@ -211,10 +290,7 @@ class GoogleSheetsClient:
             return False
 
         worksheet, row_num = result
-
-        # Status is in column J (index 9)
-        status_col = "J"
-        worksheet.update(f"{status_col}{row_num}", new_status.value)
+        worksheet.update(f"J{row_num}", new_status.value)
 
         logger.info(
             f"Updated status for {file_id} to '{new_status.value}' "
@@ -231,37 +307,41 @@ class GoogleSheetsClient:
         new_file_id_hash: str
     ) -> bool:
         """
-        Update file metadata in an existing row (for renamed files).
+        Update file metadata for a renamed file.
 
-        Finds the row by old file_id_hash and updates:
-        filename, nextcloud link, source folder, and file_id_hash.
-
-        Args:
-            old_file_id: Current file_id_hash in the sheet
-            new_filename: New filename after rename
-            new_link: New Nextcloud link
-            new_source_folder: New source folder path
-            new_file_id_hash: New file_id_hash
-
-        Returns:
-            True if updated, False if not found
+        Updates columns L (hyperlink) and M (filename) in the main sheet,
+        and updates file_id_hash + source_folder in _meta.
         """
         result = self.find_row_by_file_id(old_file_id)
-
         if not result:
-            logger.warning(
-                f"Cannot update metadata: file_id {old_file_id} not found"
-            )
+            logger.warning(f"Cannot update metadata: file_id {old_file_id} not found")
             return False
 
         worksheet, row_num = result
 
-        # Batch update: L=link, M=filename, N=source_folder, O=file_id_hash
+        # Update L:M in main sheet (hyperlink + filename)
+        hyperlink = f'=HYPERLINK("{new_link}","Открыть")'
         worksheet.update(
-            f"L{row_num}:O{row_num}",
-            [[new_link, new_filename, new_source_folder, new_file_id_hash]],
+            f"L{row_num}:M{row_num}",
+            [[hyperlink, new_filename]],
             value_input_option="USER_ENTERED"
         )
+
+        # Update _meta row: file_id_hash (col A) and source_folder (col E)
+        meta_result = self._find_meta_row(old_file_id)
+        if meta_result:
+            meta_sheet, meta_row_num = meta_result
+            meta_row = meta_sheet.row_values(meta_row_num)
+            # Ensure row has enough columns
+            while len(meta_row) < 5:
+                meta_row.append("")
+            meta_row[META_COL_FILE_ID] = new_file_id_hash
+            meta_row[META_COL_SOURCE_FOLDER] = new_source_folder
+            meta_sheet.update(
+                f"A{meta_row_num}:E{meta_row_num}",
+                [meta_row[:5]],
+                value_input_option="RAW"
+            )
 
         logger.info(
             f"Updated metadata for renamed file: {old_file_id} -> "
@@ -270,55 +350,35 @@ class GoogleSheetsClient:
         return True
 
     def mark_as_deleted(self, file_id: str) -> bool:
-        """
-        Mark a contract as deleted from source.
-
-        Args:
-            file_id: File ID hash
-
-        Returns:
-            True if updated, False if not found
-        """
+        """Mark a contract as deleted from source."""
         return self.update_status_by_file_id(
             file_id,
             ContractStatus.DELETED_FROM_SOURCE
         )
 
-    def get_all_file_ids(self) -> Set[str]:
-        """
-        Get all file IDs currently in the spreadsheet.
+    # ------------------------------------------------------------------
+    # Query / duplicate detection
+    # ------------------------------------------------------------------
 
-        Returns:
-            Set of file ID hashes
-        """
+    def get_all_file_ids(self) -> Set[str]:
+        """Get all file IDs from the _meta sheet."""
         file_ids: Set[str] = set()
 
-        for worksheet in self.spreadsheet.worksheets():
-            try:
-                # Get file_id column (column O)
-                col_values = worksheet.col_values(15)  # Column O is index 15
+        try:
+            meta_sheet = self._get_or_create_meta_sheet()
+            # Column A = file_id_hash (gspread col_values uses 1-based index)
+            col_values = meta_sheet.col_values(META_COL_FILE_ID + 1)
+            for value in col_values[1:]:  # skip header
+                if value:
+                    file_ids.add(value)
+        except Exception as e:
+            logger.warning(f"Error reading _meta sheet: {e}")
 
-                # Skip header
-                for value in col_values[1:]:
-                    if value:
-                        file_ids.add(value)
-
-            except Exception as e:
-                logger.warning(f"Error reading sheet {worksheet.title}: {e}")
-
-        logger.debug(f"Found {len(file_ids)} file IDs in spreadsheet")
+        logger.debug(f"Found {len(file_ids)} file IDs in _meta")
         return file_ids
 
     def row_exists(self, file_id: str) -> bool:
-        """
-        Check if a row with given file_id exists.
-
-        Args:
-            file_id: File ID hash
-
-        Returns:
-            True if exists, False otherwise
-        """
+        """Check if a row with given file_id exists."""
         return self.find_row_by_file_id(file_id) is not None
 
     def find_duplicate_by_filename(
@@ -328,20 +388,11 @@ class GoogleSheetsClient:
         year: Optional[int]
     ) -> Optional[Tuple[gspread.Worksheet, int, str]]:
         """
-        Find a potential duplicate entry by filename, subsidiary, and year.
-
-        This helps detect files that were moved (e.g., when city folders are added)
-        but represent the same contract.
-
-        Args:
-            filename: File name to search for
-            subsidiary: Subsidiary/company name
-            year: Year from path
+        Find a potential duplicate entry by filename + subsidiary in the year sheet.
 
         Returns:
-            Tuple of (worksheet, row_number, existing_file_id) if found, None otherwise
+            Tuple of (worksheet, row_number, file_id_hash) if found, None otherwise.
         """
-        # Try to find in the year-specific sheet first
         sheet_name = str(year) if year else "Без года"
 
         try:
@@ -350,34 +401,24 @@ class GoogleSheetsClient:
             return None
 
         try:
-            # Get all data from the sheet
             all_values = worksheet.get_all_values()
-            if len(all_values) <= 1:  # Only header or empty
+            if len(all_values) <= 1:
                 return None
 
-            # Column indices (0-based):
-            # 2 = Контрагент (counterparty)
-            # 3 = Дочерняя компания (subsidiary)
-            # 12 = Имя файла (filename)
-            # 14 = file_id_hash
-            filename_col = 12
-            subsidiary_col = 3
-            file_id_col = 14
+            # Build a meta index for this sheet: row_number_str -> file_id_hash
+            meta_index = self._build_meta_index_for_sheet(sheet_name)
 
-            for row_idx, row in enumerate(all_values[1:], start=2):  # Skip header
-                if len(row) > max(filename_col, subsidiary_col, file_id_col):
-                    row_filename = row[filename_col] if len(row) > filename_col else ""
-                    row_subsidiary = row[subsidiary_col] if len(row) > subsidiary_col else ""
-                    row_file_id = row[file_id_col] if len(row) > file_id_col else ""
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                row_filename = row[COL_FILENAME] if len(row) > COL_FILENAME else ""
+                row_subsidiary = row[COL_SUBSIDIARY] if len(row) > COL_SUBSIDIARY else ""
 
-                    # Check for match
-                    if row_filename == filename and row_subsidiary == subsidiary:
-                        logger.info(
-                            f"Found potential duplicate: {filename} "
-                            f"(subsidiary={subsidiary}, year={year}) "
-                            f"at row {row_idx}"
-                        )
-                        return (worksheet, row_idx, row_file_id)
+                if row_filename == filename and row_subsidiary == subsidiary:
+                    file_id = meta_index.get(str(row_idx), "")
+                    logger.info(
+                        f"Found potential duplicate: {filename} "
+                        f"(subsidiary={subsidiary}, year={year}) at row {row_idx}"
+                    )
+                    return (worksheet, row_idx, file_id)
 
         except Exception as e:
             logger.warning(f"Error checking for duplicates: {e}")
@@ -389,15 +430,9 @@ class GoogleSheetsClient:
         year: Optional[int]
     ) -> Dict[Tuple[str, str], str]:
         """
-        Get all existing filename+subsidiary combinations for a specific year.
+        Get all existing (filename, subsidiary) -> file_id_hash for a specific year.
 
-        This is more efficient for batch processing than checking one by one.
-
-        Args:
-            year: Year to check
-
-        Returns:
-            Dictionary mapping (filename, subsidiary) to file_id_hash
+        Used for efficient duplicate detection during batch processing.
         """
         result: Dict[Tuple[str, str], str] = {}
         sheet_name = str(year) if year else "Без года"
@@ -412,21 +447,42 @@ class GoogleSheetsClient:
             if len(all_values) <= 1:
                 return result
 
-            # Column indices
-            filename_col = 12
-            subsidiary_col = 3
-            file_id_col = 14
+            # Build meta index: row_number_str -> file_id_hash
+            meta_index = self._build_meta_index_for_sheet(sheet_name)
 
-            for row in all_values[1:]:
-                if len(row) > max(filename_col, subsidiary_col, file_id_col):
-                    filename = row[filename_col] if len(row) > filename_col else ""
-                    subsidiary = row[subsidiary_col] if len(row) > subsidiary_col else ""
-                    file_id = row[file_id_col] if len(row) > file_id_col else ""
+            for row_idx, row in enumerate(all_values[1:], start=2):
+                row_filename = row[COL_FILENAME] if len(row) > COL_FILENAME else ""
+                row_subsidiary = row[COL_SUBSIDIARY] if len(row) > COL_SUBSIDIARY else ""
+                file_id = meta_index.get(str(row_idx), "")
 
-                    if filename and subsidiary:
-                        result[(filename, subsidiary)] = file_id
+                if row_filename and row_subsidiary:
+                    result[(row_filename, row_subsidiary)] = file_id
 
         except Exception as e:
             logger.warning(f"Error getting existing filenames for year {year}: {e}")
 
         return result
+
+    def _build_meta_index_for_sheet(
+        self,
+        sheet_name: str
+    ) -> Dict[str, str]:
+        """
+        Build a row_number -> file_id_hash index for a specific sheet from _meta.
+
+        Returns:
+            Dict mapping row_number_str to file_id_hash.
+        """
+        index: Dict[str, str] = {}
+        try:
+            meta_sheet = self._get_or_create_meta_sheet()
+            all_meta = meta_sheet.get_all_values()
+            for meta_row in all_meta[1:]:  # skip header
+                if len(meta_row) >= 3 and meta_row[META_COL_SHEET] == sheet_name:
+                    row_num_str = meta_row[META_COL_ROW]
+                    file_id = meta_row[META_COL_FILE_ID]
+                    if row_num_str and file_id:
+                        index[row_num_str] = file_id
+        except Exception as e:
+            logger.warning(f"Error building meta index for sheet '{sheet_name}': {e}")
+        return index
