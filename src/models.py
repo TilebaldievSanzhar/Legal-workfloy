@@ -193,7 +193,7 @@ class TableRow(BaseModel):
         Convert to a list of strings for Google Sheets (13 visible columns A-M).
         source_folder, file_id_hash, processed_at are stored in the _meta sheet.
         """
-        hyperlink = f'=HYPERLINK("{self.nextcloud_link}","Открыть")'
+        hyperlink = f'=HYPERLINK("{self.nextcloud_link}";"Открыть")'
         return [
             self.document_type.value,
             self.contract_number or "",

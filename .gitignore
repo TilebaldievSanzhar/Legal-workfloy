@@ -3,3 +3,4 @@ venv
 .env
 .env.example
 config/google_credentials.json
+.claude

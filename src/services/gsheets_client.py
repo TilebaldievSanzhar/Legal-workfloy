@@ -320,7 +320,7 @@ class GoogleSheetsClient:
         worksheet, row_num = result
 
         # Update L:M in main sheet (hyperlink + filename)
-        hyperlink = f'=HYPERLINK("{new_link}","Открыть")'
+        hyperlink = f'=HYPERLINK("{new_link}";"Открыть")'
         worksheet.update(
             f"L{row_num}:M{row_num}",
             [[hyperlink, new_filename]],
