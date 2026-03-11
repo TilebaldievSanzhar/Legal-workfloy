@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     nc_host: str = Field(..., description="Nextcloud server URL")
     nc_user: str = Field(..., description="Nextcloud username")
     nc_password: str = Field(..., description="Nextcloud password")
-    target_folders: str = Field(
+    target_folders: List[str] = Field(
         ...,
-        description="Comma-separated list of folders to monitor"
+        description="JSON list of folders to monitor"
     )
 
     # Google Configuration
@@ -75,8 +75,8 @@ class Settings(BaseSettings):
 
     @property
     def target_folders_list(self) -> List[str]:
-        """Parse comma-separated target folders into a list."""
-        return [f.strip() for f in self.target_folders.split(",") if f.strip()]
+        """Return target folders list."""
+        return [f.strip() for f in self.target_folders if f.strip()]
 
     @property
     def process_years_list(self) -> Optional[List[int]]:
