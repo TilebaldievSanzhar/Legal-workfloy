@@ -4,11 +4,13 @@ Handles recursive folder scanning and file downloads.
 """
 
 import hashlib
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import PurePosixPath
 import tempfile
 
+import requests
 from webdav3.client import Client
 from webdav3.exceptions import WebDavException
 
@@ -32,6 +34,7 @@ class NextcloudClient:
         """
         self.host = host.rstrip("/")
         self.username = username
+        self.password = password
 
         # Сохраняем префикс, который сервер добавляет к путям
         self.webdav_root = f"/remote.php/dav/files/{username}"
@@ -85,6 +88,9 @@ class NextcloudClient:
             # List folder contents
             items = self.client.list(folder_path, get_info=True)
 
+            # Get Nextcloud file IDs for this folder
+            fileids = self._get_fileids_for_folder(folder_path)
+
             for item in items:
                 # Получаем полный путь от сервера
                 full_path = item.get("path", "")
@@ -108,6 +114,8 @@ class NextcloudClient:
                     # Recurse into subdirectory используя корректный путь
                     self._scan_recursive(relative_path, file_extension, result)
                 elif relative_path.lower().endswith(file_extension.lower()):
+                    # Attach nc_fileid from PROPFIND result
+                    item["nc_fileid"] = fileids.get(relative_path.rstrip("/"))
                     # Process file
                     file_meta = self._create_file_metadata(item)
                     result[file_meta.file_id] = file_meta
@@ -116,6 +124,57 @@ class NextcloudClient:
             logger.error(f"Error scanning folder {folder_path}: {e}")
         except Exception as e:
             logger.error(f"Unexpected error scanning {folder_path}: {e}")
+
+    def _get_fileids_for_folder(self, folder_path: str) -> Dict[str, int]:
+        """
+        Get Nextcloud internal file IDs for all items in a folder via PROPFIND.
+
+        Returns:
+            Dict mapping relative path -> nc_fileid
+        """
+        from urllib.parse import unquote
+
+        url = f"{self.host}{self.webdav_root}{folder_path}"
+        body = """<?xml version="1.0" encoding="UTF-8"?>
+        <d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+            <d:prop>
+                <oc:fileid/>
+            </d:prop>
+        </d:propfind>"""
+
+        try:
+            resp = requests.request(
+                "PROPFIND",
+                url,
+                data=body,
+                headers={"Depth": "1", "Content-Type": "application/xml"},
+                auth=(self.username, self.password),
+                timeout=30
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(f"PROPFIND failed for {folder_path}: {e}")
+            return {}
+
+        fileids: Dict[str, int] = {}
+        try:
+            root = ET.fromstring(resp.content)
+            ns = {"d": "DAV:", "oc": "http://owncloud.org/ns"}
+            for response in root.findall("d:response", ns):
+                href = response.findtext("d:href", "", ns)
+                fileid_el = response.find(".//oc:fileid", ns)
+                if href and fileid_el is not None and fileid_el.text:
+                    # href is like /remote.php/dav/files/user/path
+                    decoded = unquote(href)
+                    if decoded.startswith(self.webdav_root):
+                        rel_path = decoded[len(self.webdav_root):]
+                    else:
+                        rel_path = decoded
+                    fileids[rel_path.rstrip("/")] = int(fileid_el.text)
+        except ET.ParseError as e:
+            logger.warning(f"Failed to parse PROPFIND response: {e}")
+
+        return fileids
 
     def _create_file_metadata(self, item: dict) -> FileMetadata:
         """
@@ -148,13 +207,16 @@ class NextcloudClient:
         # Generate unique file ID hash
         file_id = self.generate_file_hash(path, etag or str(size))
 
+        nc_fileid = item.get("nc_fileid")
+
         return FileMetadata(
             file_id=file_id,
             path=path,
             filename=filename,
             size=size,
             modified=modified,
-            etag=etag
+            etag=etag,
+            nc_fileid=nc_fileid
         )
 
     @staticmethod
@@ -208,19 +270,23 @@ class NextcloudClient:
             logger.error(f"Unexpected error downloading {remote_path}: {e}")
             raise
 
-    def generate_public_link(self, path: str) -> str:
+    def generate_public_link(self, path: str, nc_fileid: Optional[int] = None) -> str:
         """
         Generate a web UI link to file in Nextcloud.
 
-        Uses the /apps/files/ endpoint which opens in the Nextcloud web interface
-        and handles authentication via the normal login flow.
+        If nc_fileid is available, uses /f/{fileid} which opens the file
+        directly in the Nextcloud viewer. Otherwise falls back to directory link.
 
         Args:
             path: File path in Nextcloud
+            nc_fileid: Nextcloud internal file ID (opens file directly)
 
         Returns:
             URL to access the file in Nextcloud web UI
         """
+        if nc_fileid:
+            return f"{self.host}/f/{nc_fileid}"
+
         from urllib.parse import quote
 
         p = PurePosixPath(path)
@@ -230,7 +296,7 @@ class NextcloudClient:
         dir_encoded = quote(dir_path)
         filename_encoded = quote(filename)
 
-        return f"{self.host.rstrip('/')}/apps/files/?dir={dir_encoded}&scrollto={filename_encoded}"
+        return f"{self.host}/apps/files/?dir={dir_encoded}&scrollto={filename_encoded}"
 
     def file_exists(self, path: str) -> bool:
         """

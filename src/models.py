@@ -239,6 +239,7 @@ class FileMetadata(BaseModel):
     size: int = Field(description="File size in bytes")
     modified: datetime = Field(description="Last modification time")
     etag: Optional[str] = Field(default=None, description="ETag for change detection")
+    nc_fileid: Optional[int] = Field(default=None, description="Nextcloud internal file ID")
 
     def to_dict(self) -> dict:
         """Convert to dictionary for state storage."""
@@ -248,7 +249,8 @@ class FileMetadata(BaseModel):
             "filename": self.filename,
             "size": self.size,
             "modified": self.modified.isoformat(),
-            "etag": self.etag
+            "etag": self.etag,
+            "nc_fileid": self.nc_fileid
         }
 
     @classmethod
@@ -260,5 +262,6 @@ class FileMetadata(BaseModel):
             filename=data["filename"],
             size=data["size"],
             modified=datetime.fromisoformat(data["modified"]),
-            etag=data.get("etag")
+            etag=data.get("etag"),
+            nc_fileid=data.get("nc_fileid")
         )

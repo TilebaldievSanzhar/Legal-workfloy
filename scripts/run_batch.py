@@ -71,7 +71,7 @@ def process_file(
         path_info = PathInfo(file_meta.path, target_folders)
 
         # Generate Nextcloud link
-        nc_link = nextcloud.generate_public_link(file_meta.path)
+        nc_link = nextcloud.generate_public_link(file_meta.path, file_meta.nc_fileid)
 
         # Create table row
         row = TableRow.from_extract(

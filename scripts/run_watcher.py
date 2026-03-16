@@ -87,7 +87,7 @@ def process_new_file(
         path_info = PathInfo(file_meta.path, target_folders)
 
         # Generate Nextcloud link
-        nc_link = nextcloud.generate_public_link(file_meta.path)
+        nc_link = nextcloud.generate_public_link(file_meta.path, file_meta.nc_fileid)
 
         # Create table row
         row = TableRow.from_extract(
@@ -206,7 +206,7 @@ def run_watcher_cycle(
     # Process renames
     for old_id, new_id in renamed_pairs:
         new_meta = current_files[new_id]
-        nc_link = nextcloud.generate_public_link(new_meta.path)
+        nc_link = nextcloud.generate_public_link(new_meta.path, new_meta.nc_fileid)
         path_info = PathInfo(new_meta.path, target_folders)
 
         success = gsheets.update_row_metadata(
