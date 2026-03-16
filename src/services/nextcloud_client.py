@@ -210,20 +210,27 @@ class NextcloudClient:
 
     def generate_public_link(self, path: str) -> str:
         """
-        Generate a direct link to file in Nextcloud.
+        Generate a web UI link to file in Nextcloud.
 
-        Note: This creates a link that requires authentication.
-        For public links, you would need to create a share via Nextcloud API.
+        Uses the /apps/files/ endpoint which opens in the Nextcloud web interface
+        and handles authentication via the normal login flow.
 
         Args:
             path: File path in Nextcloud
 
         Returns:
-            URL to access the file
+            URL to access the file in Nextcloud web UI
         """
-        # Encode path for URL
-        path_encoded = path.replace(" ", "%20")
-        return f"{self.host}/remote.php/dav/files/{self.username}{path_encoded}"
+        from urllib.parse import quote
+
+        p = PurePosixPath(path)
+        dir_path = str(p.parent)
+        filename = p.name
+
+        dir_encoded = quote(dir_path)
+        filename_encoded = quote(filename)
+
+        return f"{self.host.rstrip('/')}/apps/files/?dir={dir_encoded}&scrollto={filename_encoded}"
 
     def file_exists(self, path: str) -> bool:
         """
